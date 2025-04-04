@@ -1,28 +1,10 @@
 import { Server } from 'socket.io';
 import { createServer } from 'http';
 import express from 'express';
+import { GameRoom } from './types/gameRoomType';
+import {  Player } from './types/playerType';
+import { BingoNumber } from './types/bingoNumberType';
 
-// Tipos TypeScript
-type Player = {
-  id: string;
-  name: string;
-  isHost: boolean;
-};
-
-type BingoNumber = {
-  number: number;
-  letter: 'B' | 'I' | 'N' | 'G' | 'O';
-};
-
-type GameRoom = {
-  id: string;
-  players: Player[];
-  calledNumbers: BingoNumber[];
-  currentNumber: BingoNumber | null;
-  status: 'waiting' | 'playing' | 'finished';
-};
-
-// Configuración del servidor
 const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 3001;
@@ -34,15 +16,13 @@ const io = new Server(httpServer, {
     credentials: true
   },
   connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutos
+    maxDisconnectionDuration: 2 * 60 * 1000,
     skipMiddlewares: true
   }
 });
 
-// Almacenamiento en memoria (en producción usa Redis)
-const rooms = new Map<string, GameRoom>();
+let room: GameRoom;
 
-// Eventos de conexión
 io.on('connection', (socket) => {
   console.log(`🔌 Nuevo cliente conectado: ${socket.id}`);
 
@@ -58,32 +38,21 @@ io.on('connection', (socket) => {
         throw new Error('Se requieren ID de sala y nombre de jugador');
       }
 
-      let room = rooms.get(roomId);
-      const isHost = !room;
+      let isHost: boolean = playerName === 'host'
+      
+      if(isHost){    
+          room = {
+            id: roomId,
+            players: [],
+            calledNumbers: [],
+            currentNumber: null,
+            status: 'waiting'
+          };
+          console.log(`🏠 Nueva sala creada: ${roomId}`);
 
-      // Crear nueva sala si no existe
-      if (!room) {
-        room = {
-          id: roomId,
-          players: [],
-          calledNumbers: [],
-          currentNumber: null,
-          status: 'waiting'
-        };
-        rooms.set(roomId, room);
-        console.log(`🏠 Nueva sala creada: ${roomId}`);
+        
       }
 
-      // Validar estado de la sala
-      if (room.status === 'playing') {
-        throw new Error('La partida ya está en curso');
-      }
-
-      if (room.players.length >= 15) {
-        throw new Error('La sala está llena (máximo 15 jugadores)');
-      }
-
-      // Añadir jugador
       const player: Player = {
         id: socket.id,
         name: playerName,
@@ -100,13 +69,12 @@ io.on('connection', (socket) => {
         room
       });
 
-      // Notificar a todos en la sala
       io.to(roomId).emit('room_update', room);
       console.log(`🎮 ${playerName} se unió a la sala ${roomId}`);
 
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
-      console.error(`❌ Error en join_room: ${errorMessage}`);
+        console.error(`❌ Error en join_room: ${errorMessage}`);
       callback({
         success: false,
         error: errorMessage
@@ -117,7 +85,6 @@ io.on('connection', (socket) => {
   // Iniciar juego (solo host)
   socket.on('start_game', (roomId: string) => {
     try {
-      const room = rooms.get(roomId);
       if (!room) throw new Error('Sala no encontrada');
 
       const player = room.players.find(p => p.id === socket.id);
@@ -137,7 +104,6 @@ io.on('connection', (socket) => {
   // Llamar número (solo host)
   socket.on('call_number', (roomId: string, number: BingoNumber) => {
     try {
-      const room = rooms.get(roomId);
       if (!room) throw new Error('Sala no encontrada');
 
       const player = room.players.find(p => p.id === socket.id);
@@ -165,7 +131,6 @@ io.on('connection', (socket) => {
   // Cantar BINGO
   socket.on('claim_bingo', (roomId: string, pattern: string, callback?: (valid: boolean) => void) => {
     try {
-      const room = rooms.get(roomId);
       if (!room) throw new Error('Sala no encontrada');
   
       const player = room.players.find(p => p.id === socket.id);
@@ -211,8 +176,10 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`🔌 Cliente desconectado: ${socket.id}`);
     
-    rooms.forEach((room, roomId) => {
+      if (!room) return;
+
       const initialCount = room.players.length;
+
       room.players = room.players.filter(p => p.id !== socket.id);
 
       if (room.players.length !== initialCount) {
@@ -220,16 +187,14 @@ io.on('connection', (socket) => {
         if (room.players.length > 0 && !room.players.some(p => p.isHost)) {
           room.players[0].isHost = true;
         }
-
         // Eliminar sala si está vacía
         if (room.players.length === 0) {
-          rooms.delete(roomId);
-          console.log(`🗑 Sala ${roomId} eliminada (vacía)`);
+          console.log(`🗑 Sala ${room.id} eliminada (vacía)`);
         } else {
-          io.to(roomId).emit('room_update', room);
+          io.to(room.id).emit('room_update', room);
         }
       }
-    });
+
   });
 
   // Manejar errores
@@ -238,22 +203,11 @@ io.on('connection', (socket) => {
   });
 });
 
-// Ruta de salud
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    rooms: rooms.size,
-    uptime: process.uptime()
-  });
-});
-
 // Iniciar servidor
 httpServer.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en http://localhost:${PORT}`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/health`);
 });
 
-// Manejar cierre limpio
 process.on('SIGTERM', () => {
   console.log('🛑 Apagando servidor...');
   httpServer.close(() => {
