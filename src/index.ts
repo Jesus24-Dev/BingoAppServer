@@ -1,9 +1,11 @@
 import { Server } from 'socket.io';
 import { createServer } from 'http';
-import express from 'express';
+import express, {Request, Response} from 'express';
 import { GameRoom } from './types/gameRoomType';
 import {  Player } from './types/playerType';
 import { BingoNumber } from './types/bingoNumberType';
+import { BingoWinner } from './types/bingoWinnerType';
+import cors from 'cors';
 
 const app = express();
 const httpServer = createServer(app);
@@ -21,56 +23,83 @@ const io = new Server(httpServer, {
   }
 });
 
-let room: GameRoom;
+let room: GameRoom | null = null;
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cors())
+
+app.post('/room', (req: Request, res: Response): any => {
+  const { roomId, playerName } = req.body;
+  console.log(req.body)
+  if (!roomId || !playerName) {
+    return res.status(400).json({ error: 'ID de sala y nombre de jugador son requeridos' });
+  }
+
+  let isHost: boolean = playerName === 'host'
+
+  try{
+    const player: Player = {
+      id: '',
+      name: playerName,
+      isHost: isHost
+    };
+  
+    if(isHost){
+      room = {
+        id: roomId,
+        players: [],
+        calledNumbers: [],
+        currentNumber: null,
+        winners: [],
+        status: 'waiting'
+      };
+    }
+    
+    return res.status(200).json({ success: true, player: player, roomId: room?.id });
+  } catch(err){
+    const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
+    console.log(errorMessage)
+    return res.status(400).json({ error: err});  
+  }
+
+})
 
 io.on('connection', (socket) => {
   console.log(`🔌 Nuevo cliente conectado: ${socket.id}`);
 
   // Unirse o crear sala
-  socket.on('join_room', (roomId: string, playerName: string, callback: (response: {
+  socket.on('join_room', (roomId: string, player: Player, callback: (response: {
     success: boolean;
     isHost?: boolean;
     error?: string;
-    room?: GameRoom;
+    room?: GameRoom | null;
+    player?: Player;
   }) => void) => {
     try {
-      if (!roomId || !playerName) {
+      console.log(`🛋 ${player.name} intenta unirse a la sala ${roomId}`);
+      if (!roomId || !player.name ) {
         throw new Error('Se requieren ID de sala y nombre de jugador');
       }
 
-      let isHost: boolean = playerName === 'host'
-      
-      if(isHost){    
-          room = {
-            id: roomId,
-            players: [],
-            calledNumbers: [],
-            currentNumber: null,
-            status: 'waiting'
-          };
-          console.log(`🏠 Nueva sala creada: ${roomId}`);
-
-        
-      }
-
-      const player: Player = {
+      const playerMatch: Player = {
         id: socket.id,
-        name: playerName,
-        isHost
+        name: player.name,
+        isHost: player.isHost || false
       };
 
-      room.players.push(player);
+      room?.players.push(playerMatch);
       socket.join(roomId);
 
-      // Responder al cliente
       callback({
         success: true,
-        isHost,
-        room
+        isHost: playerMatch.isHost,
+        room: room,
+        player: playerMatch
       });
 
       io.to(roomId).emit('room_update', room);
-      console.log(`🎮 ${playerName} se unió a la sala ${roomId}`);
+      console.log(`🎮 ${playerMatch.name} se unió a la sala ${roomId}`);
 
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
@@ -113,6 +142,7 @@ io.on('connection', (socket) => {
       room.currentNumber = number;
       
       io.to(roomId).emit('number_called', number);
+      io.to(roomId).emit('room_update', room);
       console.log(`🔢 Número llamado en ${roomId}: ${number.letter}-${number.number}`);
 
       // Verificar si se han llamado todos los números
@@ -132,39 +162,62 @@ io.on('connection', (socket) => {
   socket.on('claim_bingo', (roomId: string, pattern: string, callback?: (valid: boolean) => void) => {
     try {
       if (!room) throw new Error('Sala no encontrada');
+      
+      // Verificar si este socket (jugador) ya está en la lista de ganadores
+      const alreadyWon = room.winners.some(winner => winner.playerId === socket.id);
+      if (alreadyWon) {
+        console.log(`⚠ El jugador ${socket.id} ya reclamó BINGO anteriormente`);
+        if (callback) callback(false);
+        return;
+      }
   
       const player = room.players.find(p => p.id === socket.id);
       if (!player) throw new Error('Jugador no encontrado');
   
-      // Implementa tu lógica de validación real aquí
-      const isValidBingo = validateBingo(room, socket.id, pattern); 
+      const isValidBingo = validateBingo(room, socket.id, pattern);
   
       if (isValidBingo) {
-        room.status = 'finished';
-        io.to(roomId).emit('bingo_claimed', {
+        
+  
+        const winner = {
+          playerId: socket.id,  // Usamos el socket.id como identificador único
           playerName: player.name,
-          pattern,
-          timestamp: new Date()
-        });
-        console.log(`🎉 BINGO válido en ${roomId} por ${player.name}`);
+          pattern: pattern
+        };
+        
+        room.winners.push(winner);
+
+        console.log(room.winners.length)
+
+        if(room.winners.length === 2){
+          room.status = 'finished';
+          console.log('Ya hay dos ganadores, el juego ha terminado')
+        }
+  
+        io.to(roomId).emit('bingo_claimed', { winner });
+        io.to(roomId).emit('room_update', room);
+        console.log(`🎉 BINGO válido por ${player.name} (${socket.id})`);
       } else {
-        console.log(`⚠ BINGO inválido en ${roomId} por ${player.name}`);
+        console.log(`⚠ Intento de BINGO inválido por ${player.name}`);
       }
   
-      // Solo llamar al callback si existe
-      if (typeof callback === 'function') {
-        callback(isValidBingo);
-      }
+      if (callback) callback(isValidBingo);
   
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
       console.error(`❌ Error en claim_bingo: ${errorMessage}`);
-      
-      if (typeof callback === 'function') {
-        callback(false);
-      }
+      if (callback) callback(false);
     }
   });
+
+  socket.on('reset_bingo', (roomId: string) => {
+    if (!room) return;
+    room.calledNumbers = [];
+    room.currentNumber = null;
+    room.status = 'waiting';
+    io.to(roomId).emit('bingo_claimed', null)
+    io.to(roomId).emit('room_update', room);
+  })
   
   // Función de ejemplo para validar BINGO
   function validateBingo(room: GameRoom, playerId: string, pattern: string): boolean {
