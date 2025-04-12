@@ -25,7 +25,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(cors({
-  origin: 'https://bingo-4m0d21c8p-jesus24-devs-projects.vercel.app',
+  origin: 'https://bingo-app-nine.vercel.app',
   methods: ['GET', 'POST'],
   credentials: true
 }));
