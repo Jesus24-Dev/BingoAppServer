@@ -1,0 +1,1 @@
+export type BingoPattern = 'horizontal' | 'vertical' | 'diagonal' | 'four-corners' | 'full-house';

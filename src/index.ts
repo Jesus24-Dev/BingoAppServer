@@ -1,42 +1,45 @@
-import { Server } from 'socket.io';
-import { createServer } from 'http';
 import express, {Request, Response} from 'express';
 import { GameRoom } from './types/gameRoomType';
 import {  Player } from './types/playerType';
 import { BingoNumber } from './types/bingoNumberType';
-import { BingoWinner } from './types/bingoWinnerType';
+import { AuthenticatedSocket } from './types/authenticatedSocketType';
 import cors from 'cors';
+import jwt from 'jsonwebtoken'
+import { randomUUID } from 'crypto';
+import { checkHost } from './utils/checkHost';
+import 'dotenv/config';
 
-const app = express();
-const httpServer = createServer(app);
-const PORT = process.env.PORT || 3001;
+import { initializeServer } from './config/socket';
 
-const io = new Server(httpServer, {
-  cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
-    methods: ["GET", "POST"],
-    credentials: true
-  },
-  connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000,
-    skipMiddlewares: true
-  }
-});
+const {app, io, httpServer} = initializeServer();
+const PORT = process.env.PORT
+const SECRET_KEY = process.env.SECRET_KEY
+
+if (!SECRET_KEY) {
+  throw new Error("La variable de entorno SECRET_KEY no está definida");
+}
 
 let room: GameRoom | null = null;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors())
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL,
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
 
 app.post('/room', (req: Request, res: Response): any => {
-  const { roomId, playerName } = req.body;
-  console.log(req.body)
-  if (!roomId || !playerName) {
+  const { playerName } = req.body;
+  if (!playerName) {
     return res.status(400).json({ error: 'ID de sala y nombre de jugador son requeridos' });
   }
 
-  let isHost: boolean = playerName === 'host'
+  const token = jwt.sign({ playerName }, SECRET_KEY, { expiresIn: '4h' });
+
+
+  let isHost = checkHost(playerName)
 
   try{
     const player: Player = {
@@ -46,6 +49,7 @@ app.post('/room', (req: Request, res: Response): any => {
     };
   
     if(isHost){
+      const roomId = randomUUID();
       room = {
         id: roomId,
         players: [],
@@ -56,7 +60,7 @@ app.post('/room', (req: Request, res: Response): any => {
       };
     }
     
-    return res.status(200).json({ success: true, player: player, roomId: room?.id });
+    return res.status(200).json({ success: true, player: player, roomId: room?.id, token: token });
   } catch(err){
     const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
     console.log(errorMessage)
@@ -65,9 +69,21 @@ app.post('/room', (req: Request, res: Response): any => {
 
 })
 
-io.on('connection', (socket) => {
-  console.log(`🔌 Nuevo cliente conectado: ${socket.id}`);
+io.use((socket: AuthenticatedSocket, next) => {
+  const token = socket.handshake.auth.token;
+  if(!token){
+      return next(new Error('Authentication is required'))
+  }
+  try {
+      const decoded = jwt.verify(token, SECRET_KEY);
+      socket.user = decoded
+      next()
+  } catch (err) {
+      return next(new Error('Invalid token'))
+  }
+})
 
+io.on('connection', (socket) => {
   // Unirse o crear sala
   socket.on('join_room', (roomId: string, player: Player, callback: (response: {
     success: boolean;
@@ -77,7 +93,6 @@ io.on('connection', (socket) => {
     player?: Player;
   }) => void) => {
     try {
-      console.log(`🛋 ${player.name} intenta unirse a la sala ${roomId}`);
       if (!roomId || !player.name ) {
         throw new Error('Se requieren ID de sala y nombre de jugador');
       }
@@ -99,7 +114,6 @@ io.on('connection', (socket) => {
       });
 
       io.to(roomId).emit('room_update', room);
-      console.log(`🎮 ${playerMatch.name} se unió a la sala ${roomId}`);
 
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
@@ -121,7 +135,6 @@ io.on('connection', (socket) => {
 
       room.status = 'playing';
       io.to(roomId).emit('game_started', room);
-      console.log(`🚀 Juego iniciado en sala ${roomId}`);
 
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
@@ -143,7 +156,6 @@ io.on('connection', (socket) => {
       
       io.to(roomId).emit('number_called', number);
       io.to(roomId).emit('room_update', room);
-      console.log(`🔢 Número llamado en ${roomId}: ${number.letter}-${number.number}`);
 
       // Verificar si se han llamado todos los números
       if (room.calledNumbers.length >= 75) {
@@ -166,7 +178,6 @@ io.on('connection', (socket) => {
       // Verificar si este socket (jugador) ya está en la lista de ganadores
       const alreadyWon = room.winners.some(winner => winner.playerId === socket.id);
       if (alreadyWon) {
-        console.log(`⚠ El jugador ${socket.id} ya reclamó BINGO anteriormente`);
         if (callback) callback(false);
         return;
       }
@@ -187,16 +198,15 @@ io.on('connection', (socket) => {
         
         room.winners.push(winner);
 
-        console.log(room.winners.length)
+        // if(room.winners.length === 2){
+        //   room.status = 'finished';
+        //   console.log('Ya hay dos ganadores, el juego ha terminado')
+        // }
 
-        if(room.winners.length === 2){
-          room.status = 'finished';
-          console.log('Ya hay dos ganadores, el juego ha terminado')
-        }
+        room.status = 'finished';
   
         io.to(roomId).emit('bingo_claimed', { winner });
         io.to(roomId).emit('room_update', room);
-        console.log(`🎉 BINGO válido por ${player.name} (${socket.id})`);
       } else {
         console.log(`⚠ Intento de BINGO inválido por ${player.name}`);
       }
@@ -227,7 +237,6 @@ io.on('connection', (socket) => {
 
   // Manejar desconexión
   socket.on('disconnect', () => {
-    console.log(`🔌 Cliente desconectado: ${socket.id}`);
     
       if (!room) return;
 
@@ -256,9 +265,8 @@ io.on('connection', (socket) => {
   });
 });
 
-// Iniciar servidor
 httpServer.listen(PORT, () => {
-  console.log(`🚀 Servidor escuchando en http://localhost:${PORT}`);
+  console.log(`🚀 Servidor escuchando en ${PORT}`);
 });
 
 process.on('SIGTERM', () => {
