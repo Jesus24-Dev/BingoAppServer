@@ -23,7 +23,12 @@ let room: GameRoom | null = null;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors())
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL,
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
 
 app.post('/room', (req: Request, res: Response): any => {
   const { playerName } = req.body;
