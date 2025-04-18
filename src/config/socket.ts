@@ -9,7 +9,7 @@ export const initializeServer = () => {
   
   const io = new Server(httpServer, {
     cors: {
-      origin: 'https://bingo-app-nine.vercel.app',
+      origin: process.env.FRONTEND_URL,
       methods: ["GET", "POST"],
       credentials: true
     },
