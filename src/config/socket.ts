@@ -9,7 +9,7 @@ export const initializeServer = () => {
   
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.FRONTEND_URL,
+      origin: process.env.FRONTEND_URL_HOST,
       methods: ["GET", "POST"],
       credentials: true
     },
