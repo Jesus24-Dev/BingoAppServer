@@ -150,6 +150,13 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on("changeIdRoom", (roomId: string) => {
+    if(room){
+      room.id = roomId;
+    }
+    io.to(roomId).emit('room_update', room);
+  })
+
   // Llamar número (solo host)
   socket.on('call_number', async (roomId: string, number: BingoNumber) => {
     try {
