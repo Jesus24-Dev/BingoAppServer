@@ -152,7 +152,7 @@ io.on('connection', (socket) => {
 
   socket.on("changeIdRoom", (roomId: string) => {
     if(room){
-      room.id = roomId;
+      initRoom(roomId)
     }
     io.to(roomId).emit('room_update', room);
   })
