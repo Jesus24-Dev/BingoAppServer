@@ -10,7 +10,6 @@ export async function readJsonFile(): Promise<BingoNumber[]> {
   try {
     const data = await fs.readFile(jsonFilePath, 'utf-8');
     const jsonData: BingoNumber[] = JSON.parse(data);
-    console.log('Archivo leído correctamente:', jsonData);
     return jsonData;
   } catch (error) {
     console.error('Error al leer el archivo:', error);
