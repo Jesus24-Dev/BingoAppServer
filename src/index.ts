@@ -152,7 +152,7 @@ io.on('connection', (socket) => {
 
   socket.on("changeIdRoom", (roomId: string) => {
     if(room){
-      room.id = roomId;
+      initRoom(roomId)
     }
     io.to(roomId).emit('room_update', room);
   })
@@ -171,6 +171,8 @@ io.on('connection', (socket) => {
       io.to(roomId).emit('number_called', number);
       io.to(roomId).emit('room_update', room);
   
+      await writeJsonFile(room.calledNumbers);
+
       // Verificar si se han llamado todos los números
       if (room.calledNumbers.length >= 75) {
         room.status = 'finished';
@@ -203,8 +205,6 @@ io.on('connection', (socket) => {
       const isValidBingo = validateBingo(room, socket.id, pattern);
   
       if (isValidBingo) {
-        
-  
         const winner = {
           playerId: socket.id,  // Usamos el socket.id como identificador único
           playerName: player.name,
@@ -219,7 +219,6 @@ io.on('connection', (socket) => {
         // }
 
         room.status = 'finished';
-  
         io.to(roomId).emit('bingo_claimed', { winner });
         io.to(roomId).emit('room_update', room);
       } else {
@@ -240,6 +239,7 @@ io.on('connection', (socket) => {
     room.calledNumbers = [];
     room.currentNumber = null;
     room.status = 'waiting';
+    room.winners = [];    
     io.to(roomId).emit('bingo_claimed', null)
     io.to(roomId).emit('room_update', room);
   })
